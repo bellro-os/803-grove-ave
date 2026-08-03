@@ -1,0 +1,508 @@
+// Builds the listing-strategy PDF as a designed, fixed-page document.
+//
+// Loads index.html in Chromium, then recomposes the site's own content
+// (headlines, facts table, photos, map, chart, comp table, scenario cards)
+// into a sequence of fixed Letter-size pages. Every page is a closed
+// canvas: content is measured and scaled to fit, so nothing flows across
+// page boundaries.
+//
+// Usage: NODE_PATH=$(npm root -g) node scripts/build-pdf.js [output.pdf]
+// Requires: playwright (with its Chromium browser installed)
+
+const path = require('path');
+const { chromium } = require('playwright');
+
+const SRC = 'file://' + path.resolve(__dirname, '..', 'index.html');
+const OUT = process.argv[2] || path.resolve(__dirname, '..', '803-Grove-Avenue-Listing-Strategy.pdf');
+
+const DOC_CSS = `
+  body { margin: 0; background: #fff; }
+  body > *:not(#pdoc) { display: none !important; }
+  #pdoc .reveal { opacity: 1 !important; transform: none !important; transition: none !important; }
+
+  .pd-page {
+    width: 816px; height: 1056px; position: relative; overflow: hidden;
+    background: var(--paper); color: var(--ink); break-after: page;
+  }
+  .pd-page:last-child { break-after: auto; }
+
+  .pd-head {
+    position: absolute; top: 40px; left: 56px; right: 56px;
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-family: 'Archivo', sans-serif; font-weight: 700; font-size: 9.5px;
+    letter-spacing: .16em; text-transform: uppercase; color: var(--ink-3);
+    padding-bottom: 10px; border-bottom: 1px solid var(--line);
+  }
+  .pd-foot {
+    position: absolute; bottom: 30px; left: 56px; right: 56px;
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-family: 'Archivo', sans-serif; font-weight: 700; font-size: 9px;
+    letter-spacing: .16em; text-transform: uppercase; color: var(--ink-3);
+    padding-top: 10px; border-top: 1px solid var(--line);
+  }
+  .pd-body { position: absolute; top: 100px; left: 56px; right: 56px; bottom: 80px; overflow: hidden; }
+  .pd-body.pd-center { display: flex; flex-direction: column; justify-content: center; }
+
+  .pd-dark { background: var(--charcoal); color: var(--on-charcoal); }
+  .pd-dark .pd-head, .pd-dark .pd-foot { color: rgba(244,243,246,.55); border-color: rgba(244,243,246,.16); }
+  .pd-maroon { background: linear-gradient(165deg, var(--maroon) 0%, var(--maroon-deep) 100%); color: #fdf6f2; }
+  .pd-maroon::before {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 6px;
+    background: linear-gradient(90deg, var(--orange), #f2a45c);
+  }
+  .pd-maroon .pd-head, .pd-maroon .pd-foot { color: rgba(253,246,242,.6); border-color: rgba(253,246,242,.22); }
+
+  .pd-h2 {
+    font-family: 'Archivo', sans-serif; font-weight: 800; font-size: 30px;
+    line-height: 1.14; letter-spacing: -.015em; margin: 10px 0 18px; text-wrap: balance;
+  }
+  #pdoc .sec-head { margin-bottom: 26px; }
+  #pdoc .sec-head h2 { margin-bottom: 0; }
+  #pdoc .lede { margin-bottom: 0; }
+
+  /* ---- cover ---- */
+  .pd-cover-photo {
+    position: absolute; top: 0; left: 0; right: 0; height: 470px;
+    background-size: cover; background-position: center 62%;
+  }
+  .pd-cover-photo::after {
+    content: ''; position: absolute; inset: 0;
+    background: linear-gradient(180deg, rgba(34,36,44,.18) 0%, rgba(34,36,44,0) 35%, var(--charcoal) 99%);
+  }
+  .pd-cover-main { position: absolute; top: 430px; left: 64px; right: 64px; }
+  .pd-cover-main .eyebrow { color: #c9a6ff; }
+  .pd-cover-main h1 {
+    font-family: 'Archivo', sans-serif; font-weight: 800; font-size: 64px;
+    letter-spacing: -.02em; line-height: 1.02; margin: 14px 0 18px; color: #fff;
+  }
+  .pd-cover-rule { border: 0; border-top: 1px solid rgba(244,243,246,.18); margin: 26px 0 24px; }
+  .pd-cover-meta { display: flex; justify-content: space-between; align-items: center; gap: 20px; flex-wrap: wrap; }
+  .pd-cover-stats {
+    position: absolute; bottom: 0; left: 0; right: 0; padding: 30px 64px 38px;
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 28px;
+    border-top: 1px solid rgba(244,243,246,.14); background: rgba(0,0,0,.14);
+  }
+
+  /* ---- content rail (page 2) ---- */
+  .pd-rail { display: grid; grid-template-columns: repeat(4, 1fr); gap: 26px; margin-top: 44px; }
+  .pd-rail > div { border-top: 2px solid var(--ink); padding-top: 14px; }
+  .pd-rail b { display: block; font-family: 'Archivo', sans-serif; font-weight: 800; font-size: 25px; letter-spacing: -.01em; }
+  .pd-rail span {
+    display: block; margin-top: 6px; font-family: 'Archivo', sans-serif; font-weight: 700;
+    font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); line-height: 1.5;
+  }
+
+  /* ---- component fit adjustments ---- */
+  .pd-cover-stats .stat { border: none !important; border-top: 1px solid rgba(244,243,246,.22) !important; padding: 14px 0 0 !important; }
+  #pdoc .facts { zoom: 0.92; }
+  #pdoc .facts th, #pdoc .facts td { padding: 8px 12px; }
+  #pdoc .tile-grid { grid-template-columns: 1fr 1fr 1fr !important; gap: 12px; }
+  #pdoc .phases { grid-template-columns: 1fr 1fr !important; gap: 14px; }
+  #pdoc .chan-grid { grid-template-columns: 1fr 1fr 1fr !important; gap: 12px; margin-top: 14px; }
+  #pdoc .scenarios { margin-top: 20px; }
+  #pdoc .dev-panel { grid-template-columns: 1.5fr 1fr !important; }
+  #pdoc .dev-stats { border-left: 1px solid var(--line) !important; border-top: none !important; }
+  #pdoc .hokie { background: none !important; padding: 0 !important; margin: 0 !important; border-radius: 0 !important; box-shadow: none !important; }
+  #pdoc .hokie::before, #pdoc .hokie::after { display: none !important; }
+  #pdoc .hokie-nums { grid-template-columns: repeat(4, 1fr) !important; }
+  #pdoc .hokie-cols { grid-template-columns: 1fr 1fr !important; }
+  #pdoc .about { background: none !important; padding: 0 !important; margin: 0 !important; }
+  #pdoc .about-grid { grid-template-columns: 300px 1fr !important; gap: 40px; align-items: start; }
+  #pdoc .about-photo img { width: 100%; display: block; }
+  #pdoc .walk-list li { padding: 8px 0; }
+  #pdoc .walk-list .d { font-size: 13.5px; }
+  #pdoc .chart-card svg, #pdoc .mapbox svg { max-width: 100%; height: auto; }
+
+  .pd-loc-grid { display: grid; grid-template-columns: 58% 1fr; gap: 26px; align-items: start; }
+  .pd-map-scale { zoom: 0.82; }
+  #pdoc .mapbox { box-shadow: none; }
+
+  /* ---- photo pages ---- */
+  .pd-ph-row { display: grid; gap: 10px; margin-bottom: 10px; }
+  .pd-ph-row.two { grid-template-columns: 7fr 5fr; }
+  .pd-ph-row.three { grid-template-columns: 1fr 1fr 1fr; }
+  .pd-fig { position: relative; margin: 0; border-radius: 8px; overflow: hidden; }
+  .pd-fig img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .pd-fig figcaption {
+    position: absolute; left: 0; right: 0; bottom: 0; padding: 26px 14px 10px;
+    color: #fff; font-size: 12px; font-family: 'Archivo', sans-serif; font-weight: 600;
+    letter-spacing: .03em; background: linear-gradient(transparent, rgba(16,17,22,.78));
+  }
+
+  /* ---- maroon page ---- */
+  .pd-maroon .hokie-inner { padding: 0 !important; }
+  .pd-gameday-card {
+    background: linear-gradient(165deg, var(--maroon) 0%, var(--maroon-deep) 100%);
+    color: #fdf6f2; border-radius: 12px; padding: 30px 34px 24px; margin-bottom: 22px;
+  }
+
+  /* ---- back cover ---- */
+  .pd-back .foot-contact { margin-top: 22px; font-size: 15px; line-height: 1.9; }
+  .pd-back .disclaimer { margin-top: 0; max-width: 560px; }
+  .pd-back-rule { border: 0; border-top: 1px solid rgba(244,243,246,.16); margin: 34px 0; }
+
+  /* ---- closing contact strip ---- */
+  .pd-contact-strip {
+    margin-top: 26px; display: flex; align-items: center; gap: 16px;
+    background: var(--charcoal); color: var(--on-charcoal); border-radius: 12px; padding: 20px 26px;
+  }
+  .pd-contact-strip img { width: 52px; height: 52px; border-radius: 50%; object-fit: cover; }
+  .pd-contact-strip b { font-family: 'Archivo', sans-serif; font-weight: 700; display: block; font-size: 15px; }
+  .pd-contact-strip span { color: var(--on-charcoal-2); font-size: 13.5px; }
+`;
+
+function buildDoc() {
+  const $ = (s, r) => (r || document).querySelector(s);
+  const $$ = (s, r) => [...(r || document).querySelectorAll(s)];
+  const el = (tag, cls, html) => {
+    const d = document.createElement(tag);
+    if (cls) d.className = cls;
+    if (html !== undefined) d.innerHTML = html;
+    return d;
+  };
+
+  // budget bar fills are normally set by a scroll observer
+  $$('.budget-row').forEach((r) => {
+    const f = $('.fill', r);
+    if (f && r.dataset.w) f.style.width = r.dataset.w + '%';
+  });
+
+  // make the JS-drawn chart scalable inside a narrower container
+  $$('#comp-chart svg').forEach((svg) => {
+    if (!svg.getAttribute('viewBox')) {
+      const w = svg.getAttribute('width'), h = svg.getAttribute('height');
+      if (w && h) svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+    }
+    svg.removeAttribute('height');
+    svg.style.width = '100%';
+    svg.style.height = 'auto';
+  });
+
+  const doc = el('div');
+  doc.id = 'pdoc';
+  const pages = [];
+
+  function addPage(opts) {
+    opts = opts || {};
+    const p = el('div', 'pd-page' + (opts.variant ? ' ' + opts.variant : ''));
+    let body = null;
+    if (!opts.raw) {
+      if (opts.chrome !== false) {
+        p.appendChild(el('div', 'pd-head',
+          '<span>803 Grove Avenue</span><span>Listing strategy · August 2026</span>'));
+        p.appendChild(el('div', 'pd-foot',
+          '<span>Gravity Real Estate Group</span><span class="pd-pageno"></span>'));
+      }
+      body = el('div', 'pd-body' + (opts.center ? ' pd-center' : ''));
+      p.appendChild(body);
+    }
+    doc.appendChild(p);
+    pages.push(p);
+    return { page: p, body: body };
+  }
+
+  const title = (eyebrow, h2) =>
+    '<p class="eyebrow">' + eyebrow + '</p>' + (h2 ? '<h2 class="pd-h2">' + h2 + '</h2>' : '');
+
+  const galleryFigs = $$('#gallery figure').map((f) => ({
+    src: $('img', f).getAttribute('src'),
+    cap: ($('figcaption', f) || {}).textContent || '',
+  }));
+
+  /* ---------------- 1 · cover ---------------- */
+  {
+    const { page } = addPage({ raw: true, variant: 'pd-dark' });
+    const photo = el('div', 'pd-cover-photo');
+    photo.style.backgroundImage = getComputedStyle($('.hero-img')).backgroundImage;
+    page.appendChild(photo);
+
+    const main = el('div', 'pd-cover-main');
+    main.appendChild($('.hero .eyebrow'));
+    main.appendChild($('.hero h1'));
+    main.appendChild($('.hero-sub'));
+    main.appendChild(el('hr', 'pd-cover-rule'));
+    const meta = el('div', 'pd-cover-meta');
+    meta.appendChild($('.agent-chip'));
+    meta.appendChild($('.hero-tags'));
+    main.appendChild(meta);
+    page.appendChild(main);
+
+    const stats = el('div', 'pd-cover-stats');
+    $$('.stat-band .stat').forEach((s) => stats.appendChild(s));
+    page.appendChild(stats);
+  }
+
+  /* ---------------- 2 · the opportunity ---------------- */
+  {
+    const { body } = addPage({ center: true });
+    const t = $('section.tight .wrap');
+    ['.eyebrow', 'h2', 'p:nth-of-type(2)', 'p:nth-of-type(3)'].forEach(() => {});
+    body.appendChild($('.eyebrow', t));
+    body.appendChild($('h2', t));
+    $$('p', t).forEach((p) => body.appendChild(p));
+    body.appendChild(el('div', 'pd-rail',
+      '<div><b>73</b><span>Townhomes approved directly across the road, from the $600s</span></div>' +
+      '<div><b>$434,185</b><span>Typical 24060 home value, Zillow ZHVI, June 2026</span></div>' +
+      '<div><b>99.2%</b><span>Sale-to-list ratio across the Blacksburg market</span></div>' +
+      '<div><b>3.6 mo</b><span>Months of supply — seller’s-market territory</span></div>'));
+  }
+
+  /* ---------------- 3 · 01 the property ---------------- */
+  {
+    const { body } = addPage({});
+    body.appendChild($('#property .sec-head'));
+    body.appendChild($('#property .facts'));
+    const side = $$('#property .prop-grid > .reveal')[1];
+    body.appendChild($('p', side));
+    body.appendChild($('.callout', side));
+  }
+
+  /* ---------------- 4 · photographs ---------------- */
+  {
+    const { body } = addPage({});
+    body.appendChild(el('div', '', title('01 · The property', 'The house in photographs')));
+    const rows = [
+      { cls: 'two', h: 264, figs: galleryFigs.slice(0, 2) },
+      { cls: 'three', h: 238, figs: galleryFigs.slice(2, 5) },
+      { cls: 'three', h: 238, figs: galleryFigs.slice(5, 8) },
+    ];
+    rows.forEach((r) => {
+      const row = el('div', 'pd-ph-row ' + r.cls);
+      r.figs.forEach((f) => {
+        const fig = el('figure', 'pd-fig',
+          '<img src="' + f.src + '" alt=""><figcaption>' + f.cap + '</figcaption>');
+        fig.style.height = r.h + 'px';
+        row.appendChild(fig);
+      });
+      body.appendChild(row);
+    });
+  }
+
+  /* ---------------- 5 · 02 the location ---------------- */
+  {
+    const { body } = addPage({});
+    const head = el('div');
+    head.appendChild($('#location .eyebrow'));
+    head.appendChild($('#location h2'));
+    head.appendChild($('#location .lede'));
+    head.className = 'sec-head';
+    body.appendChild(head);
+    const grid = el('div', 'pd-loc-grid');
+    const mapCell = el('div', 'pd-map-scale');
+    mapCell.appendChild($('.mapbox'));
+    grid.appendChild(mapCell);
+    const walkCell = el('div');
+    walkCell.appendChild($('.walk-list'));
+    grid.appendChild(walkCell);
+    body.appendChild(grid);
+  }
+
+  /* ---------------- 6 · across the road ---------------- */
+  {
+    const { body } = addPage({ center: true });
+    body.appendChild(el('div', '', title('02 · The location', 'What breaks ground across the street')));
+    body.appendChild($('.dev-panel'));
+  }
+
+  /* ---------------- 7 · 03 the market ---------------- */
+  {
+    const { body } = addPage({});
+    body.appendChild($('#market .sec-head'));
+    body.appendChild($('#market .tile-grid'));
+    body.appendChild($('#market .num-note'));
+  }
+
+  /* ---------------- 8 · 04 the valuation ---------------- */
+  {
+    const { body } = addPage({});
+    body.appendChild($('#valuation .sec-head'));
+    body.appendChild($('#valuation .chart-card'));
+  }
+
+  /* ---------------- 9 · the comp set ---------------- */
+  {
+    const { body } = addPage({});
+    body.appendChild(el('div', '', title('04 · The valuation', 'The comp set behind the numbers')));
+    body.appendChild($('.comp-table-wrap'));
+    body.appendChild($('#valuation .num-note'));
+    body.appendChild($('#valuation .callout'));
+  }
+
+  /* ---------------- 10 · proof ---------------- */
+  {
+    const { body } = addPage({ center: true });
+    body.appendChild(el('div', '', title('04 · The valuation', 'The market already ran this experiment')));
+    const spot = $('.spotlight');
+    const closing = spot.nextElementSibling;
+    body.appendChild(spot);
+    if (closing && closing.tagName === 'P') body.appendChild(closing);
+  }
+
+  /* ---------------- 11 · 05 renovation ---------------- */
+  {
+    const { body } = addPage({});
+    body.appendChild($('#renovation .sec-head'));
+    body.appendChild($$('#renovation .reno-grid > .reveal')[0]);
+  }
+
+  /* ---------------- 12 · two paths ---------------- */
+  {
+    const { body } = addPage({});
+    body.appendChild(el('div', '', title('05 · The renovation option', 'Two clean paths, and the math between them')));
+    body.appendChild($('.scenarios'));
+    body.appendChild($('.bridge-wrap'));
+    body.appendChild($('#renovation .callout'));
+  }
+
+  /* ---------------- 13 · 06 marketing plan ---------------- */
+  {
+    const { body } = addPage({});
+    body.appendChild($('#marketing .sec-head'));
+    body.appendChild($('.phases'));
+  }
+
+  /* ---------------- 14 · hokie nation ---------------- */
+  {
+    const { body } = addPage({ variant: 'pd-maroon' });
+    const hokie = $('.hokie');
+    // the game slate moves to the next page
+    const gameday = $('.gameday', hokie);
+    const fine = $('.fineprint', hokie);
+    body.appendChild(hokie);
+    const hold = el('div');
+    hold.appendChild(gameday);
+    hold.appendChild(fine);
+    document.body.appendChild(hold);
+    hold.id = 'pd-hold';
+  }
+
+  /* ---------------- 15 · timed to the season ---------------- */
+  {
+    const { body } = addPage({});
+    body.appendChild(el('div', '', title('06 · The marketing plan', 'Timed to a season when Hokie Nation comes to town')));
+    const card = el('div', 'pd-gameday-card');
+    const hold = $('#pd-hold');
+    card.appendChild($('.gameday', hold));
+    card.appendChild($('.fineprint', hold));
+    hold.remove();
+    body.appendChild(card);
+    body.appendChild($('.chan-grid'));
+  }
+
+  /* ---------------- 16 · 07 the listing team ---------------- */
+  {
+    const { body } = addPage({ variant: 'pd-dark', center: true });
+    const wrap = el('div', 'about');
+    wrap.appendChild($('.about-grid'));
+    body.appendChild(wrap);
+  }
+
+  /* ---------------- 17 · 08 next steps ---------------- */
+  {
+    const { body } = addPage({});
+    body.appendChild($('#next .sec-head'));
+    body.appendChild($('.steps'));
+    const agentImg = $('.pd-cover-main .agent-chip img', doc) || $('.agent-chip img');
+    body.appendChild(el('div', 'pd-contact-strip',
+      '<img src="' + agentImg.getAttribute('src') + '" alt="">' +
+      '<div><b>Ready when you are.</b>' +
+      '<span>Austin Cummings · (540) 525-3116 · austin@gravitygroup.us</span></div>'));
+  }
+
+  /* ---------------- 18 · back cover ---------------- */
+  {
+    const { body } = addPage({ variant: 'pd-dark pd-back', chrome: false, center: true });
+    const logo = $('.foot-logo');
+    body.appendChild(logo);
+    body.appendChild($('.foot-contact'));
+    body.appendChild(el('hr', 'pd-back-rule'));
+    body.appendChild($('.disclaimer'));
+  }
+
+  document.body.appendChild(doc);
+
+  // chan cards land on page 13 but were authored after .hokie in the DOM;
+  // move-order above already placed them — just number the pages now
+  const total = pages.length;
+  pages.forEach((p, i) => {
+    const n = $('.pd-pageno', p);
+    if (n) n.textContent = 'Page ' + (i + 1) + ' of ' + total;
+  });
+
+  return { pages: total };
+}
+
+function autofit() {
+  // measures the vertical span of a body's children (robust under flex
+  // centering, where scrollHeight under-reports content that overflows
+  // upward), then steps zoom down until the content fits
+  const span = (b) => {
+    const kids = [...b.children];
+    if (!kids.length) return 0;
+    let top = Infinity, bottom = -Infinity;
+    for (const k of kids) {
+      const r = k.getBoundingClientRect();
+      const cs = getComputedStyle(k);
+      top = Math.min(top, r.top - parseFloat(cs.marginTop));
+      bottom = Math.max(bottom, r.bottom + parseFloat(cs.marginBottom));
+    }
+    return bottom - top;
+  };
+  const report = [];
+  [...document.querySelectorAll('.pd-body')].forEach((b, i) => {
+    const avail = b.getBoundingClientRect().height;
+    let z = 1;
+    while (z > 0.7 && span(b) > avail + 1) {
+      z = Math.round((z - 0.02) * 100) / 100;
+      b.style.zoom = z;
+    }
+    report.push({
+      page: i + 2,
+      zoom: z,
+      overflow: Math.max(0, Math.round(span(b) - avail)),
+    });
+  });
+  return report;
+}
+
+(async () => {
+  const browser = await chromium.launch();
+  const page = await browser.newPage({ viewport: { width: 816, height: 1056 } });
+
+  await page.emulateMedia({ reducedMotion: 'reduce', colorScheme: 'light' });
+  await page.goto(SRC, { waitUntil: 'load' });
+
+  await page.evaluate(async () => {
+    document.querySelectorAll('img[loading="lazy"]').forEach((img) => { img.loading = 'eager'; });
+    await document.fonts.ready;
+    await Promise.all(
+      [...document.images]
+        .filter((i) => i.getAttribute('src'))
+        .map((i) => (i.complete ? null : new Promise((r) => { i.onload = i.onerror = r; })))
+    );
+  });
+  await page.waitForSelector('#comp-chart svg', { timeout: 10000 }).catch(() => {
+    console.warn('warning: chart svg not found');
+  });
+
+  await page.addStyleTag({ content: DOC_CSS });
+  const built = await page.evaluate(buildDoc);
+  const fit = await page.evaluate(autofit);
+
+  console.log('pages: ' + built.pages);
+  for (const f of fit) {
+    if (f.zoom < 1 || f.overflow > 0) {
+      console.log('  page ' + f.page + ': zoom ' + f.zoom + (f.overflow ? ' OVERFLOW ' + f.overflow + 'px' : ''));
+    }
+  }
+
+  await page.pdf({
+    path: OUT,
+    format: 'Letter',
+    printBackground: true,
+    margin: { top: '0', right: '0', bottom: '0', left: '0' },
+  });
+
+  await browser.close();
+  console.log('wrote ' + OUT);
+})();
