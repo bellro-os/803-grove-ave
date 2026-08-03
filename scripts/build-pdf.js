@@ -40,8 +40,18 @@ const DOC_CSS = `
     letter-spacing: .16em; text-transform: uppercase; color: var(--ink-3);
     padding-top: 10px; border-top: 1px solid var(--line);
   }
-  .pd-body { position: absolute; top: 100px; left: 56px; right: 56px; bottom: 80px; overflow: hidden; }
+  /* clipping stays on .pd-page: .pd-body gets transform-scaled by autofit,
+     and overflow on the transformed element would clip pre-transform */
+  .pd-body { position: absolute; top: 100px; left: 56px; right: 56px; bottom: 80px; }
   .pd-body.pd-center { display: flex; flex-direction: column; justify-content: center; }
+
+  /* Chromium exports blurred box-shadows as PDF soft masks, which Apple's
+     PDF viewers render as opaque gray boxes — kill every shadow and give
+     card surfaces a crisp border instead */
+  #pdoc *, #pdoc *::before, #pdoc *::after { box-shadow: none !important; text-shadow: none !important; }
+  #pdoc :where(.tile, .chart-card, .comp-table-wrap, .phase, .chan, .step, .facts) {
+    border: 1px solid var(--line-2);
+  }
 
   .pd-dark { background: var(--charcoal); color: var(--on-charcoal); }
   .pd-dark .pd-head, .pd-dark .pd-foot { color: rgba(244,243,246,.55); border-color: rgba(244,243,246,.16); }
@@ -94,8 +104,8 @@ const DOC_CSS = `
 
   /* ---- component fit adjustments ---- */
   .pd-cover-stats .stat { border: none !important; border-top: 1px solid rgba(244,243,246,.22) !important; padding: 14px 0 0 !important; }
-  #pdoc .facts { zoom: 0.92; }
-  #pdoc .facts th, #pdoc .facts td { padding: 8px 12px; }
+  #pdoc .facts th, #pdoc .facts td { padding: 7px 12px; }
+  #pdoc .facts td { font-size: 14px; }
   #pdoc .tile-grid { grid-template-columns: 1fr 1fr 1fr !important; gap: 12px; }
   #pdoc .phases { grid-template-columns: 1fr 1fr !important; gap: 14px; }
   #pdoc .chan-grid { grid-template-columns: 1fr 1fr 1fr !important; gap: 12px; margin-top: 14px; }
@@ -106,16 +116,19 @@ const DOC_CSS = `
   #pdoc .hokie::before, #pdoc .hokie::after { display: none !important; }
   #pdoc .hokie-nums { grid-template-columns: repeat(4, 1fr) !important; }
   #pdoc .hokie-cols { grid-template-columns: 1fr 1fr !important; }
+  #pdoc .spotlight { grid-template-columns: 1fr auto 1fr !important; }
+  #pdoc .spot-mid { padding: 0 26px !important; justify-content: center !important; }
   #pdoc .about { background: none !important; padding: 0 !important; margin: 0 !important; }
   #pdoc .about-grid { grid-template-columns: 300px 1fr !important; gap: 40px; align-items: start; }
   #pdoc .about-photo img { width: 100%; display: block; }
-  #pdoc .walk-list li { padding: 8px 0; }
+  /* the map SVG must render at >= its natural viewBox size: Chromium's PDF
+     export corrupts SVG text glyph spacing when the SVG is scaled down */
+  #pdoc .mapbox svg { width: 100%; height: auto; display: block; }
+  #pdoc .chart-card svg { max-width: 100%; height: auto; }
+  #pdoc .walk-list { display: grid; grid-template-columns: 1fr 1fr; column-gap: 40px; margin-top: 6px; }
+  #pdoc .walk-list li { padding: 10px 0; }
+  #pdoc .walk-list li:nth-child(-n+2) { border-top: none; }
   #pdoc .walk-list .d { font-size: 13.5px; }
-  #pdoc .chart-card svg, #pdoc .mapbox svg { max-width: 100%; height: auto; }
-
-  .pd-loc-grid { display: grid; grid-template-columns: 58% 1fr; gap: 26px; align-items: start; }
-  .pd-map-scale { zoom: 0.82; }
-  #pdoc .mapbox { box-shadow: none; }
 
   /* ---- photo pages ---- */
   .pd-ph-row { display: grid; gap: 10px; margin-bottom: 10px; }
@@ -287,20 +300,14 @@ function buildDoc() {
     head.appendChild($('#location .lede'));
     head.className = 'sec-head';
     body.appendChild(head);
-    const grid = el('div', 'pd-loc-grid');
-    const mapCell = el('div', 'pd-map-scale');
-    mapCell.appendChild($('.mapbox'));
-    grid.appendChild(mapCell);
-    const walkCell = el('div');
-    walkCell.appendChild($('.walk-list'));
-    grid.appendChild(walkCell);
-    body.appendChild(grid);
+    body.appendChild($('.mapbox'));
   }
 
-  /* ---------------- 6 · across the road ---------------- */
+  /* ---------------- 6 · on foot + across the road ---------------- */
   {
-    const { body } = addPage({ center: true });
-    body.appendChild(el('div', '', title('02 · The location', 'What breaks ground across the street')));
+    const { body } = addPage({});
+    body.appendChild(el('div', '', title('02 · The location', 'Timed on foot, and what breaks ground across the street')));
+    body.appendChild($('.walk-list'));
     body.appendChild($('.dev-panel'));
   }
 
@@ -448,6 +455,10 @@ function autofit() {
     }
     return bottom - top;
   };
+  // scale via CSS zoom, which genuinely re-lays-out the content smaller:
+  // transform-scaling instead leaves layout at full size, and Chromium's
+  // print fragmentation slices paint by layout position, clipping any page
+  // whose unscaled layout crosses the 11in boundary
   const report = [];
   [...document.querySelectorAll('.pd-body')].forEach((b, i) => {
     const avail = b.getBoundingClientRect().height;
@@ -467,7 +478,10 @@ function autofit() {
 
 (async () => {
   const browser = await chromium.launch();
-  const page = await browser.newPage({ viewport: { width: 816, height: 1056 } });
+  // 752px viewport = 704px .wrap content width, so the JS-drawn chart SVG
+  // is created at exactly the width the document pages display it at —
+  // Chromium's PDF export corrupts SVG text that gets scaled down
+  const page = await browser.newPage({ viewport: { width: 752, height: 1056 } });
 
   await page.emulateMedia({ reducedMotion: 'reduce', colorScheme: 'light' });
   await page.goto(SRC, { waitUntil: 'load' });
