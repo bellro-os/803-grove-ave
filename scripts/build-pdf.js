@@ -130,17 +130,12 @@ const DOC_CSS = `
   #pdoc .walk-list li:nth-child(-n+2) { border-top: none; }
   #pdoc .walk-list .d { font-size: 13.5px; }
 
-  /* ---- photo pages ---- */
+  /* ---- photo pages (no caption overlays: clean photography) ---- */
   .pd-ph-row { display: grid; gap: 10px; margin-bottom: 10px; }
   .pd-ph-row.two { grid-template-columns: 7fr 5fr; }
   .pd-ph-row.three { grid-template-columns: 1fr 1fr 1fr; }
   .pd-fig { position: relative; margin: 0; border-radius: 8px; overflow: hidden; }
   .pd-fig img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .pd-fig figcaption {
-    position: absolute; left: 0; right: 0; bottom: 0; padding: 26px 14px 10px;
-    color: #fff; font-size: 12px; font-family: 'Archivo', sans-serif; font-weight: 600;
-    letter-spacing: .03em; background: linear-gradient(transparent, rgba(16,17,22,.78));
-  }
 
   /* ---- maroon page ---- */
   .pd-maroon .hokie-inner { padding: 0 !important; }
@@ -282,8 +277,7 @@ function buildDoc() {
     rows.forEach((r) => {
       const row = el('div', 'pd-ph-row ' + r.cls);
       r.figs.forEach((f) => {
-        const fig = el('figure', 'pd-fig',
-          '<img src="' + f.src + '" alt=""><figcaption>' + f.cap + '</figcaption>');
+        const fig = el('figure', 'pd-fig', '<img src="' + f.src + '" alt="">');
         fig.style.height = r.h + 'px';
         row.appendChild(fig);
       });
@@ -337,7 +331,7 @@ function buildDoc() {
 
   /* ---------------- 10 · proof ---------------- */
   {
-    const { body } = addPage({ center: true });
+    const { body } = addPage({});
     body.appendChild(el('div', '', title('04 · The valuation', 'The market already ran this experiment')));
     const spot = $('.spotlight');
     const closing = spot.nextElementSibling;
@@ -478,10 +472,11 @@ function autofit() {
 
 (async () => {
   const browser = await chromium.launch();
-  // 752px viewport = 704px .wrap content width, so the JS-drawn chart SVG
-  // is created at exactly the width the document pages display it at —
-  // Chromium's PDF export corrupts SVG text that gets scaled down
-  const page = await browser.newPage({ viewport: { width: 752, height: 1056 } });
+  // 688px viewport = 640px .wrap content width, so the JS-drawn chart SVG
+  // is created narrower than the 704px the document displays it at and only
+  // ever scales UP — Chromium's PDF export corrupts SVG text scaled down,
+  // while upscaled SVG text stays exact (same reason the map gets a full page)
+  const page = await browser.newPage({ viewport: { width: 688, height: 1056 } });
 
   await page.emulateMedia({ reducedMotion: 'reduce', colorScheme: 'light' });
   await page.goto(SRC, { waitUntil: 'load' });
