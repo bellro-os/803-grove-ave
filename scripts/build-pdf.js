@@ -139,7 +139,10 @@ const DOC_CSS = `
   #pdoc .gameday { display: grid !important; grid-template-columns: repeat(3, 1fr) !important; gap: 10px !important; }
   #pdoc .gameday .game { display: block; }
   #pdoc .chan h4 { text-wrap: balance; }
-  #pdoc .tile .k { min-height: 28px; }
+  #pdoc .tile .k { min-height: 43px; }
+  #pdoc .callout b { font-kerning: none; }
+  #pdoc .mapbox svg text { word-spacing: 2.5px; }
+  #pdoc { --ink-3: #75737e; }
   #pdoc .dev-stat .k { text-wrap: balance; }
   #pdoc .legend .sw { border-radius: 50%; }
   #pdoc .map-note { margin-left: 25px; }
@@ -223,9 +226,23 @@ function buildDoc() {
     svg.style.height = 'auto';
   });
 
-  // widen the map legend card so its title clears the border comfortably
+  // widen the map legend card so its title clears the border comfortably,
+  // and round the vertical road's open end so it reads as a deliberate stop
   const legendRect = $('.mapbox svg rect');
   if (legendRect) legendRect.setAttribute('width', '170');
+  const roadPath = $('.mapbox svg path');
+  if (roadPath) roadPath.setAttribute('stroke-linecap', 'round');
+
+  // the as-is chart marker's pale halo + range band read as a rendering
+  // smudge in print — reduce to a clean dot, symmetric with the renovated one
+  $$('#comp-chart rect').forEach((r) => {
+    if (parseFloat(r.getAttribute('opacity') || '1') < 0.5) r.remove();
+  });
+  $$('#comp-chart circle').forEach((c) => {
+    const o = parseFloat(c.getAttribute('opacity') || '1');
+    const rr = parseFloat(c.getAttribute('r') || '0');
+    if (o < 0.5 && rr > 10) c.remove();
+  });
 
   const doc = el('div');
   doc.id = 'pdoc';
@@ -298,7 +315,7 @@ function buildDoc() {
     body.appendChild($('h2', t));
     $$('p', t).forEach((p) => body.appendChild(p));
     body.appendChild(el('div', 'pd-rail',
-      '<div><b>73</b><span>Townhomes approved directly across the road, from the $600s</span></div>' +
+      '<div><b>73</b><span>Townhomes approved across the road, priced from $600K</span></div>' +
       '<div><b>$434,185</b><span>Typical 24060 home value, Zillow ZHVI, June 2026</span></div>' +
       '<div><b>99.2%</b><span>Sale-to-list ratio across the Blacksburg market</span></div>' +
       '<div><b>3.6 mo</b><span>Months of supply — seller’s-market territory</span></div>'));
@@ -487,10 +504,15 @@ function buildDoc() {
 
   document.body.appendChild(doc);
 
-  // typographic apostrophes throughout (the source mixes ' and ’)
+  // text polish across the document: typographic apostrophes, a
+  // non-breaking hyphen in "as-is", and street numbers bound to their street
   const walker = document.createTreeWalker(doc, NodeFilter.SHOW_TEXT);
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-    if (n.nodeValue.includes("'")) n.nodeValue = n.nodeValue.replace(/'/g, '’');
+    let v = n.nodeValue;
+    if (v.includes("'")) v = v.replace(/'/g, '’');
+    if (v.includes('as-is')) v = v.replace(/as-is/g, 'as‑is');
+    if (v.includes('Patrick Henry')) v = v.replace(/(\d{3}) Patrick Henry/g, '$1 Patrick Henry');
+    if (v !== n.nodeValue) n.nodeValue = v;
   }
 
   const total = pages.length;
