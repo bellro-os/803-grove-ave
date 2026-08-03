@@ -9,11 +9,17 @@
 // Usage: NODE_PATH=$(npm root -g) node scripts/build-pdf.js [output.pdf]
 // Requires: playwright (with its Chromium browser installed)
 
+const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright');
 
 const SRC = 'file://' + path.resolve(__dirname, '..', 'index.html');
 const OUT = process.argv[2] || path.resolve(__dirname, '..', '803-Grove-Avenue-Listing-Strategy.pdf');
+// static instances of the site's variable fonts (see make-static-fonts.py):
+// Chromium's PDF export embeds variable fonts as Type 3 with quantized glyph
+// advances, producing spurious gaps ("Kit chen, f ull ref resh") — static
+// instances embed as proper CID TrueType with exact metrics
+const FONTS_CSS = path.join(__dirname, 'fonts-static.css');
 
 const DOC_CSS = `
   body { margin: 0; background: #fff; }
@@ -77,7 +83,7 @@ const DOC_CSS = `
   }
   .pd-cover-photo::after {
     content: ''; position: absolute; inset: 0;
-    background: linear-gradient(180deg, rgba(34,36,44,.18) 0%, rgba(34,36,44,0) 35%, var(--charcoal) 99%);
+    background: linear-gradient(180deg, rgba(34,36,44,.16) 0%, rgba(34,36,44,.1) 40%, rgba(34,36,44,.72) 66%, var(--charcoal) 88%);
   }
   .pd-cover-main { position: absolute; top: 430px; left: 64px; right: 64px; }
   .pd-cover-main .eyebrow { color: #c9a6ff; }
@@ -116,8 +122,32 @@ const DOC_CSS = `
   #pdoc .hokie::before, #pdoc .hokie::after { display: none !important; }
   #pdoc .hokie-nums { grid-template-columns: repeat(4, 1fr) !important; }
   #pdoc .hokie-cols { grid-template-columns: 1fr 1fr !important; }
-  #pdoc .spotlight { grid-template-columns: 1fr auto 1fr !important; }
-  #pdoc .spot-mid { padding: 0 26px !important; justify-content: center !important; }
+  #pdoc .spotlight { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) !important; }
+  #pdoc .spot-side { padding: 30px 28px !important; }
+  #pdoc .spot-side .lab { text-wrap: balance; }
+  #pdoc .spot-mid { padding: 0 6px !important; justify-content: center !important; }
+  #pdoc .spot-mid .delta { transform: translateY(-12px); }
+  #pdoc .scen .flag { left: 28px; }
+  #pdoc .mathline .mop { align-self: flex-start; margin-top: 7px; }
+  #pdoc .ph-lab { white-space: nowrap; font-size: 10.5px; letter-spacing: .08em; }
+  #pdoc .phases { align-items: start; }
+  #pdoc .comps th { white-space: nowrap; }
+  #pdoc .gameday { display: grid !important; grid-template-columns: repeat(3, 1fr) !important; gap: 10px !important; }
+  #pdoc .gameday .game { display: block; }
+  #pdoc .chan h4 { text-wrap: balance; }
+  #pdoc .tile .k { min-height: 28px; }
+  #pdoc .dev-stat .k { text-wrap: balance; }
+  #pdoc .legend .sw { border-radius: 50%; }
+  #pdoc .map-note { margin-left: 25px; }
+  #pdoc .sec-head .lede { margin-top: 12px; }
+  #pdoc h2 { text-wrap: balance; }
+  #pdoc .facts th { padding-top: 10.5px; }
+  #pdoc .hero-tags { margin: 0 !important; gap: 10px; }
+  #pdoc .hero-tags .tag { margin: 0 !important; }
+  #pdoc .cred-grid { grid-template-columns: repeat(4, 1fr) !important; margin-top: 30px; }
+  #pdoc .about-grid { align-items: start !important; }
+  #pdoc .about-quote { margin-top: 26px; max-width: none; }
+  #pdoc .disclaimer { color: #9a98a4 !important; }
   #pdoc .about { background: none !important; padding: 0 !important; margin: 0 !important; }
   #pdoc .about-grid { grid-template-columns: 300px 1fr !important; gap: 40px; align-items: start; }
   #pdoc .about-photo img { width: 100%; display: block; }
@@ -147,7 +177,7 @@ const DOC_CSS = `
   /* ---- back cover ---- */
   .pd-back .foot-contact { margin-top: 22px; font-size: 15px; line-height: 1.9; }
   .pd-back .disclaimer { margin-top: 0; max-width: 560px; }
-  .pd-back-rule { border: 0; border-top: 1px solid rgba(244,243,246,.16); margin: 34px 0; }
+  .pd-back-rule { border: 0; border-top: 1px solid rgba(244,243,246,.16); margin: 34px 0; width: 560px; }
 
   /* ---- closing contact strip ---- */
   .pd-contact-strip {
@@ -185,6 +215,10 @@ function buildDoc() {
     svg.style.width = '100%';
     svg.style.height = 'auto';
   });
+
+  // widen the map legend card so its title clears the border comfortably
+  const legendRect = $('.mapbox svg rect');
+  if (legendRect) legendRect.setAttribute('width', '170');
 
   const doc = el('div');
   doc.id = 'pdoc';
@@ -237,6 +271,14 @@ function buildDoc() {
 
     const stats = el('div', 'pd-cover-stats');
     $$('.stat-band .stat').forEach((s) => stats.appendChild(s));
+    // keep "as-is" on one line, and set the townhome stat in standard notation
+    const k0 = $('.stat:nth-child(1) .k', stats);
+    if (k0) k0.textContent = k0.textContent.replace('as-is', 'as‑is');
+    const s4 = $('.stat:nth-child(4)', stats);
+    if (s4) {
+      $('.v', s4).textContent = '$600s';
+      $('.k', s4).textContent = 'New townhomes across the road';
+    }
     page.appendChild(stats);
   }
 
@@ -394,7 +436,16 @@ function buildDoc() {
   {
     const { body } = addPage({ variant: 'pd-dark', center: true });
     const wrap = el('div', 'about');
-    wrap.appendChild($('.about-grid'));
+    const grid = $('.about-grid');
+    wrap.appendChild(grid);
+    // credentials + quote run full-width beneath the photo/bio columns so
+    // the quote anchors the spread instead of leaving an empty left column
+    const cred = $('.cred-grid', grid);
+    const quote = $('.about-quote', grid);
+    wrap.appendChild(cred);
+    wrap.appendChild(quote);
+    const inc = $$('.cred span', cred).find((s) => s.textContent.includes('Group, Inc.'));
+    if (inc) inc.textContent = inc.textContent.replace('Group, Inc.', 'Group, Inc.');
     body.appendChild(wrap);
   }
 
@@ -422,8 +473,12 @@ function buildDoc() {
 
   document.body.appendChild(doc);
 
-  // chan cards land on page 13 but were authored after .hokie in the DOM;
-  // move-order above already placed them — just number the pages now
+  // typographic apostrophes throughout (the source mixes ' and ’)
+  const walker = document.createTreeWalker(doc, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (n.nodeValue.includes("'")) n.nodeValue = n.nodeValue.replace(/'/g, '’');
+  }
+
   const total = pages.length;
   pages.forEach((p, i) => {
     const n = $('.pd-pageno', p);
@@ -456,10 +511,21 @@ function autofit() {
   const report = [];
   [...document.querySelectorAll('.pd-body')].forEach((b, i) => {
     const avail = b.getBoundingClientRect().height;
+    // zoom scales the body's own absolute insets too, so divide them back
+    // out — otherwise scaled pages start at 56*z and overhang the margins
+    const cs = getComputedStyle(b);
+    const ins = {
+      top: parseFloat(cs.top), left: parseFloat(cs.left),
+      right: parseFloat(cs.right), bottom: parseFloat(cs.bottom),
+    };
     let z = 1;
     while (z > 0.7 && span(b) > avail + 1) {
       z = Math.round((z - 0.02) * 100) / 100;
       b.style.zoom = z;
+      b.style.top = ins.top / z + 'px';
+      b.style.left = ins.left / z + 'px';
+      b.style.right = ins.right / z + 'px';
+      b.style.bottom = ins.bottom / z + 'px';
     }
     report.push({
       page: i + 2,
@@ -480,6 +546,22 @@ function autofit() {
 
   await page.emulateMedia({ reducedMotion: 'reduce', colorScheme: 'light' });
   await page.goto(SRC, { waitUntil: 'load' });
+
+  // swap the variable @font-face declarations for static instances
+  if (fs.existsSync(FONTS_CSS)) {
+    await page.evaluate(() => {
+      for (const sheet of document.styleSheets) {
+        try {
+          for (let i = sheet.cssRules.length - 1; i >= 0; i--) {
+            if (sheet.cssRules[i] instanceof CSSFontFaceRule) sheet.deleteRule(i);
+          }
+        } catch (e) { /* cross-origin sheets: none expected */ }
+      }
+    });
+    await page.addStyleTag({ content: fs.readFileSync(FONTS_CSS, 'utf8') });
+  } else {
+    console.warn('warning: fonts-static.css missing — run make-static-fonts.py; PDF will embed variable fonts with corrupted advances');
+  }
 
   await page.evaluate(async () => {
     document.querySelectorAll('img[loading="lazy"]').forEach((img) => { img.loading = 'eager'; });
