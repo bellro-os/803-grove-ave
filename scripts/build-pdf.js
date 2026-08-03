@@ -124,13 +124,17 @@ const DOC_CSS = `
   #pdoc .hokie-cols { grid-template-columns: 1fr 1fr !important; }
   #pdoc .spotlight { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) !important; }
   #pdoc .spot-side { padding: 30px 28px !important; }
-  #pdoc .spot-side .lab { text-wrap: balance; }
+  #pdoc .spot-side .lab { min-height: 30px; }
   #pdoc .spot-mid { padding: 0 6px !important; justify-content: center !important; }
-  #pdoc .spot-mid .delta { transform: translateY(-12px); }
+  #pdoc .spot-mid .delta { transform: translateY(-4px); }
   #pdoc .scen .flag { left: 28px; }
   #pdoc .mathline .mop { align-self: flex-start; margin-top: 7px; }
   #pdoc .ph-lab { white-space: nowrap; font-size: 10.5px; letter-spacing: .08em; }
-  #pdoc .phases { align-items: start; }
+  #pdoc .scen { padding: 22px !important; }
+  #pdoc .scen dl .row { padding: 7px 0; }
+  #pdoc .scen .gain-note { margin-top: 12px; }
+  #pdoc .bridge-wrap { padding: 22px 28px; }
+  #pdoc .callout { padding: 18px 22px; }
   #pdoc .comps th { white-space: nowrap; }
   #pdoc .gameday { display: grid !important; grid-template-columns: repeat(3, 1fr) !important; gap: 10px !important; }
   #pdoc .gameday .game { display: block; }
@@ -144,9 +148,12 @@ const DOC_CSS = `
   #pdoc .facts th { padding-top: 10.5px; }
   #pdoc .hero-tags { margin: 0 !important; gap: 10px; }
   #pdoc .hero-tags .tag { margin: 0 !important; }
-  #pdoc .cred-grid { grid-template-columns: repeat(4, 1fr) !important; margin-top: 30px; }
-  #pdoc .about-grid { align-items: start !important; }
-  #pdoc .about-quote { margin-top: 26px; max-width: none; }
+  #pdoc .cred-grid { grid-template-columns: repeat(4, 1fr) !important; margin-top: 30px; max-width: none !important; }
+  #pdoc .cred b { display: block; min-height: 42px; }
+  #pdoc .about-grid { align-items: stretch !important; }
+  #pdoc .about-photo { height: 100%; }
+  #pdoc .about-photo img { height: 100% !important; object-fit: cover; object-position: center 22%; }
+  #pdoc .about-quote { margin-top: 26px; max-width: none !important; }
   #pdoc .disclaimer { color: #9a98a4 !important; }
   #pdoc .about { background: none !important; padding: 0 !important; margin: 0 !important; }
   #pdoc .about-grid { grid-template-columns: 300px 1fr !important; gap: 40px; align-items: start; }
@@ -377,6 +384,9 @@ function buildDoc() {
     body.appendChild(el('div', '', title('04 · The valuation', 'The market already ran this experiment')));
     const spot = $('.spotlight');
     const closing = spot.nextElementSibling;
+    // the middot break strands the separator; a comma wraps cleanly
+    const lab0 = $('.spot-side .lab', spot);
+    if (lab0) lab0.textContent = lab0.textContent.replace(' · ', ', ');
     body.appendChild(spot);
     if (closing && closing.tagName === 'P') body.appendChild(closing);
   }
@@ -434,7 +444,7 @@ function buildDoc() {
 
   /* ---------------- 16 · 07 the listing team ---------------- */
   {
-    const { body } = addPage({ variant: 'pd-dark', center: true });
+    const { body } = addPage({ variant: 'pd-dark' });
     const wrap = el('div', 'about');
     const grid = $('.about-grid');
     wrap.appendChild(grid);
@@ -452,7 +462,11 @@ function buildDoc() {
   /* ---------------- 17 · 08 next steps ---------------- */
   {
     const { body } = addPage({});
-    body.appendChild($('#next .sec-head'));
+    const nextHead = $('#next .sec-head');
+    const nextH2 = $('h2', nextHead);
+    // avoid stranding "I" at the end of line one
+    nextH2.innerHTML = 'Three decisions,<br>and I handle everything after';
+    body.appendChild(nextHead);
     body.appendChild($('.steps'));
     const agentImg = $('.pd-cover-main .agent-chip img', doc) || $('.agent-chip img');
     body.appendChild(el('div', 'pd-contact-strip',
@@ -518,8 +532,10 @@ function autofit() {
       top: parseFloat(cs.top), left: parseFloat(cs.left),
       right: parseFloat(cs.right), bottom: parseFloat(cs.bottom),
     };
+    // fit with an 8px safety margin: print re-layout can shift metrics a
+    // few pixels versus the screen pass this measurement runs in
     let z = 1;
-    while (z > 0.7 && span(b) > avail + 1) {
+    while (z > 0.7 && span(b) > avail - 8) {
       z = Math.round((z - 0.02) * 100) / 100;
       b.style.zoom = z;
       b.style.top = ins.top / z + 'px';
@@ -575,6 +591,11 @@ function autofit() {
   await page.waitForSelector('#comp-chart svg', { timeout: 10000 }).catch(() => {
     console.warn('warning: chart svg not found');
   });
+
+  // now that the chart has drawn at 640px, match the viewport to the paper
+  // width: vw-based clamp() sizes must resolve identically in this measuring
+  // pass and in the print layout, or auto-fit under-measures every page
+  await page.setViewportSize({ width: 816, height: 1056 });
 
   await page.addStyleTag({ content: DOC_CSS });
   const built = await page.evaluate(buildDoc);
